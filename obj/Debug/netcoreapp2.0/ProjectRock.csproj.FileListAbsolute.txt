@@ -1,0 +1,10 @@
+/Users/dengweichao/Dev/ProjectRock/bin/Debug/netcoreapp2.0/ProjectRock.deps.json
+/Users/dengweichao/Dev/ProjectRock/bin/Debug/netcoreapp2.0/ProjectRock.runtimeconfig.json
+/Users/dengweichao/Dev/ProjectRock/bin/Debug/netcoreapp2.0/ProjectRock.runtimeconfig.dev.json
+/Users/dengweichao/Dev/ProjectRock/bin/Debug/netcoreapp2.0/ProjectRock.dll
+/Users/dengweichao/Dev/ProjectRock/bin/Debug/netcoreapp2.0/ProjectRock.pdb
+/Users/dengweichao/Dev/ProjectRock/obj/Debug/netcoreapp2.0/ProjectRock.csproj.CoreCompileInputs.cache
+/Users/dengweichao/Dev/ProjectRock/obj/Debug/netcoreapp2.0/ProjectRock.AssemblyInfoInputs.cache
+/Users/dengweichao/Dev/ProjectRock/obj/Debug/netcoreapp2.0/ProjectRock.AssemblyInfo.cs
+/Users/dengweichao/Dev/ProjectRock/obj/Debug/netcoreapp2.0/ProjectRock.dll
+/Users/dengweichao/Dev/ProjectRock/obj/Debug/netcoreapp2.0/ProjectRock.pdb

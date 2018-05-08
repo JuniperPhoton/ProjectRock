@@ -8,8 +8,11 @@ namespace ProjectRock
     {
         static async Task Main(string[] args)
         {
-            Console.WriteLine("Hello World!");
-            await new App().Run();
+            var str = string.Join(",", args);
+            Console.WriteLine("Args: " + str);
+            
+            var arg = args.Length > 0 ? args[0] : null;
+            await new App().Run(arg);
         }
     }
 }

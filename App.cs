@@ -5,46 +5,31 @@ using System.Net.Http;
 using System.Linq;
 using System.Threading.Tasks;
 using SkiaSharp;
+using System.Threading;
 
 public class App
 {
     private static int MAX_SIZE = 192;
 
-    private Queue<string> _urlsToDownload = new Queue<string>();
-    private Queue<string> _filesToProcess = new Queue<string>();
-    private List<string> _failsList = new List<string>();
+    private Queue<Shape> _pendingToDownload = new Queue<Shape>();
+    private Queue<Shape> _pendingToProcess = new Queue<Shape>();
+    private HashSet<Shape> _failsSet = new HashSet<Shape>();
+    private HashSet<Shape> _succeededSet = new HashSet<Shape>();
 
     private HttpClient _client = new HttpClient();
 
     public async Task Run(string pathToRead)
     {
-        var shapes = await GetShapesAsync(pathToRead);
-        if (shapes == null)
-        {
-            if (pathToRead != null)
-            {
-                Console.WriteLine($"Failed to read from path: {pathToRead}");
-            }
-            else
-            {
-                Console.WriteLine("Please put a file named \"shapes.txt\" in root dir with the dll.");
-            }
-            return;
-        }
-        if (shapes.Length == 0)
+        _client.Timeout = TimeSpan.FromMilliseconds(10000);
+
+        await GetShapesAsync(pathToRead);
+        if (_pendingToDownload.Count == 0)
         {
             Console.WriteLine("No shapes found");
             return;
         }
 
-        var filtered = shapes.Where(s => s != null);
-
-        Console.WriteLine($"about to process {filtered.Count()} shapes");
-
-        foreach (string url in filtered)
-        {
-            _urlsToDownload.Enqueue(url);
-        }
+        Console.WriteLine($"about to process {_pendingToDownload.Count} shapes");
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
@@ -57,27 +42,53 @@ public class App
 
         watch.Stop();
 
-        Console.WriteLine($"===completed with {_failsList.Count} errors and elasped time: {watch.ElapsedMilliseconds / 1000f} seconds===");
+        Console.WriteLine($"===completed with {_failsSet.Count} errors and elasped time: {watch.ElapsedMilliseconds / 1000f} seconds===");
 
-        if (_failsList.Count > 0)
+        if (_failsSet.Count > 0)
         {
-            var log = FileUtils.CreateFileToRoot("", "log.txt");
-            File.WriteAllLines(log, _failsList);
+            var log = FileUtils.CreateFileToRoot("", "error.txt");
+            var fails = new List<string>();
+            foreach (var s in _failsSet)
+            {
+                fails.Add(s.ToString());
+            }
+            File.WriteAllLines(log, fails);
+        }
+
+        if (_succeededSet.Count > 0)
+        {
+            var log = FileUtils.CreateFileToRoot("", "succeeded.txt");
+            var successes = new List<string>();
+            foreach (var s in _succeededSet)
+            {
+                successes.Add(s.CreateLog());
+            }
+            File.WriteAllLines(log, successes);
         }
     }
 
-    private async Task<string[]> GetShapesAsync(string pathToRead)
+    private async Task GetShapesAsync(string pathToRead)
     {
         var targetFile = pathToRead == null ? Directory.GetCurrentDirectory() + "/shapes.txt" : pathToRead;
         try
         {
-            return await File.ReadAllLinesAsync(targetFile);
+            var lines = await File.ReadAllLinesAsync(targetFile);
+            foreach (var line in lines)
+            {
+                var split = line.Split(',');
+                if (split.Count() == 2)
+                {
+                    var shape = new Shape();
+                    shape.Id = split[0].Replace("\"", "");
+                    shape.Url = split[1].Replace("\"", "");
+                    _pendingToDownload.Enqueue(shape);
+                }
+            }
         }
         catch (Exception)
         {
             // ignore
         }
-        return null;
     }
 
     private SKImageInfo GetTargetSize(SKBitmap bitmap)
@@ -103,9 +114,11 @@ public class App
 
     private async Task DownloadAllImagesAsync()
     {
-        while (_urlsToDownload.Count > 0)
+        while (_pendingToDownload.Count > 0)
         {
-            string url = _urlsToDownload.Dequeue();
+            Shape shape = _pendingToDownload.Dequeue();
+            var url = shape.Url;
+            var id = shape.Id;
             string file = null;
 
             try
@@ -116,7 +129,7 @@ public class App
                     result.EnsureSuccessStatusCode();
                     using (var stream = await result.Content.ReadAsStreamAsync())
                     {
-                        file = FileUtils.CreateFileToRoot("original", $"{DateTime.Now.Ticks.ToString()}.png");
+                        file = FileUtils.CreateFileToRoot("original", $"{id}.png");
                         using (var output = File.Open(file, FileMode.Create))
                         {
                             byte[] buffer = new byte[32 * 1024];
@@ -130,49 +143,69 @@ public class App
                     }
                 }
 
-                _filesToProcess.Enqueue(file);
+                shape.OutputPath = file;
+                _pendingToProcess.Enqueue(shape);
             }
             catch (Exception e)
             {
                 Console.WriteLine($"failed to download: {url}, error: {e.Message}");
-                _failsList.Add(url);
+                _failsSet.Add(shape);
             }
         }
     }
 
     private async Task ProcessAllImagesAsync()
     {
+        var wait = new SpinWait();
+
         await Task.Run(() =>
-        {
-            while (_filesToProcess.Count > 0 || _urlsToDownload.Count > 0)
-            {
-                if (_filesToProcess.Count == 0) continue;
+           {
+               while (_pendingToProcess.Count > 0 || _pendingToDownload.Count > 0)
+               {
+                   if (_pendingToProcess.Count == 0)
+                   {
+                       wait.SpinOnce();
+                       continue;
+                   }
 
-                string path = _filesToProcess.Dequeue();
-                try
-                {
-                    Console.WriteLine($"about to process: {path}");
+                   Shape shape = _pendingToProcess.Dequeue();
+                   var path = shape.OutputPath;
+                   var id = shape.Id;
+                   try
+                   {
+                       Console.WriteLine($"about to process: {path}");
 
-                    using (var stream = File.OpenRead(path))
-                    using (var inputStream = new SKManagedStream(stream))
-                    using (var original = SKBitmap.Decode(inputStream))
-                    using (var resized = original.Resize(GetTargetSize(original), SKBitmapResizeMethod.Lanczos3))
-                    {
-                        if (resized == null) return;
-                        using (var image = SKImage.FromBitmap(resized))
-                        {
-                            using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{DateTime.Now.Ticks.ToString()}.png"), FileMode.OpenOrCreate))
-                            {
-                                image.Encode(SKEncodedImageFormat.Png, 100).SaveTo(output);
-                            }
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Console.WriteLine($"failed to process: {path}, error: {e.Message}");
-                }
-            }
-        });
+                       using (var stream = File.OpenRead(path))
+                       using (var inputStream = new SKManagedStream(stream))
+                       using (var original = SKBitmap.Decode(inputStream))
+                       {
+                           if (original.ColorType != SKColorType.Rgba8888)
+                           {
+                               original.CopyTo(original, SKColorType.Rgba8888);
+                           }
+
+                           using (var resized = original.Resize(GetTargetSize(original), SKBitmapResizeMethod.Lanczos3))
+                           {
+                               using (var image = SKImage.FromBitmap(resized))
+                               {
+                                   using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{id}.png"), FileMode.OpenOrCreate))
+                                   {
+                                       image.Encode(SKEncodedImageFormat.Png, 80).SaveTo(output);
+                                   }
+                               }
+                           }
+                       }
+
+                       _succeededSet.Add(shape);
+                   }
+                   catch (Exception e)
+                   {
+                       Console.WriteLine($"failed to process: {path}, error: {e.Message}");
+                       _failsSet.Add(shape);
+                   }
+
+                   //Console.WriteLine($"pending to process: {_pendingToProcess.Count}, {_pendingToDownload.Count}");
+               }
+           });
     }
 }

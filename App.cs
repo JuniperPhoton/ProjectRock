@@ -6,16 +6,17 @@ using System.Linq;
 using System.Threading.Tasks;
 using SkiaSharp;
 using System.Threading;
+using System.Collections.Concurrent;
 
 public class App
 {
     private static int MAX_SIZE = 192;
     private static int TIMEOUT_MILLIS = 20000;
 
-    private Queue<Shape> _pendingToDownload = new Queue<Shape>();
-    private Queue<Shape> _pendingToProcess = new Queue<Shape>();
-    private HashSet<Shape> _failsSet = new HashSet<Shape>();
-    private HashSet<Shape> _succeededSet = new HashSet<Shape>();
+    private ConcurrentQueue<Shape> _pendingToDownload = new ConcurrentQueue<Shape>();
+    private ConcurrentQueue<Shape> _pendingToProcess = new ConcurrentQueue<Shape>();
+    private ConcurrentBag<Shape> _failureList = new ConcurrentBag<Shape>();
+    private ConcurrentBag<Shape> _successList = new ConcurrentBag<Shape>();
 
     private HttpClient _client = new HttpClient();
     private SKPaint _skPaint = new SKPaint();
@@ -40,8 +41,8 @@ public class App
 
         watch.Stop();
 
-        Console.WriteLine($"===completed with {_failsSet.Count} errors and elapsed time: {watch.ElapsedMilliseconds / 1000f} seconds===");
-        
+        Console.WriteLine($"===completed with {_failureList.Count} errors and elapsed time: {watch.ElapsedMilliseconds / 1000f} seconds===");
+
         _client.Dispose();
         _skPaint.Dispose();
 
@@ -51,11 +52,11 @@ public class App
 
     private void HandleFailure()
     {
-        if (_failsSet.Count > 0)
+        if (_failureList.Count > 0)
         {
             var log = FileUtils.CreateFileToRoot("", "error.txt");
             var fails = new List<string>();
-            foreach (var s in _failsSet)
+            foreach (var s in _failureList)
             {
                 fails.Add(s.ToString());
             }
@@ -65,11 +66,11 @@ public class App
 
     private void HandleSuccess()
     {
-        if (_succeededSet.Count > 0)
+        if (_successList.Count > 0)
         {
             var log = FileUtils.CreateFileToRoot("", "succeeded.txt");
             var successes = new List<string>();
-            foreach (var s in _succeededSet)
+            foreach (var s in _successList)
             {
                 successes.Add(s.CreateUpdateStatement());
             }
@@ -135,7 +136,8 @@ public class App
         var handling = 0f;
         while (_pendingToDownload.Count > 0)
         {
-            Shape shape = _pendingToDownload.Dequeue();
+            if (!_pendingToDownload.TryDequeue(out var shape)) continue;
+
             var url = shape.Url;
             var ext = shape.Extension;
             var id = shape.Id;
@@ -172,7 +174,7 @@ public class App
             catch (Exception e)
             {
                 Console.WriteLine($"failed to download: {url}, error: {e.Message}");
-                _failsSet.Add(shape);
+                _failureList.Add(shape);
             }
         }
     }
@@ -198,7 +200,8 @@ public class App
                    Console.Clear();
                    Console.WriteLine($"==process progress=={((handling / total) * 100):F}%");
 
-                   Shape shape = _pendingToProcess.Dequeue();
+                   if (!_pendingToProcess.TryDequeue(out var shape)) continue;
+
                    var path = shape.OutputPath;
                    try
                    {
@@ -211,12 +214,12 @@ public class App
                            SaveVector(shape);
                        }
 
-                       _succeededSet.Add(shape);
+                       _successList.Add(shape);
                    }
                    catch (Exception e)
                    {
                        Console.WriteLine($"failed to process: {path}, error: {e.Message}");
-                       _failsSet.Add(shape);
+                       _failureList.Add(shape);
                    }
                }
            });

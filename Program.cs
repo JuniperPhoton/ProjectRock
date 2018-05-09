@@ -12,7 +12,7 @@ namespace ProjectRock
             Console.WriteLine("Args: " + str);
             
             var arg = args.Length > 0 ? args[0] : null;
-            await new App().Run(arg);
+            await new App().RunAsync(arg);
         }
     }
 }

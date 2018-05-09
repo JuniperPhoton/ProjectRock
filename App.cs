@@ -128,6 +128,8 @@ public class App
 
     private async Task DownloadAllImagesAsync()
     {
+        var total = _pendingToDownload.Count;
+        var handling = 0f;
         while (_pendingToDownload.Count > 0)
         {
             Shape shape = _pendingToDownload.Dequeue();
@@ -139,11 +141,13 @@ public class App
             try
             {
                 file = FileUtils.CreateFileToRoot("original", $"{id}.{ext}");
+                handling++;
+
+                //Console.Clear();
+                //Console.WriteLine($"==download progress=={((handling / total) * 100):F}%");
 
                 if (!File.Exists(file))
                 {
-                    Console.WriteLine($"about to download: {url}");
-
                     using (var result = await _client.GetAsync(url))
                     {
                         result.EnsureSuccessStatusCode();
@@ -176,6 +180,8 @@ public class App
 
         await Task.Run(() =>
            {
+               var total = _pendingToDownload.Count;
+               var handling = 0d;
                while (_pendingToProcess.Count > 0 || _pendingToDownload.Count > 0)
                {
                    if (_pendingToProcess.Count == 0)
@@ -184,12 +190,15 @@ public class App
                        continue;
                    }
 
+                   handling++;
+
+                   Console.Clear();
+                   Console.WriteLine($"==process progress=={((handling / total) * 100):F}%");
+
                    Shape shape = _pendingToProcess.Dequeue();
                    var path = shape.OutputPath;
                    try
                    {
-                       Console.WriteLine($"about to process: {path}");
-
                        if (shape.IsRaster)
                        {
                            SaveRaster(shape);

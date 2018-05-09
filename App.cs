@@ -10,6 +10,7 @@ using System.Threading;
 public class App
 {
     private static int MAX_SIZE = 192;
+    private static int TIMEOUT_MILLIS = 20000;
 
     private Queue<Shape> _pendingToDownload = new Queue<Shape>();
     private Queue<Shape> _pendingToProcess = new Queue<Shape>();
@@ -17,10 +18,12 @@ public class App
     private HashSet<Shape> _succeededSet = new HashSet<Shape>();
 
     private HttpClient _client = new HttpClient();
+    private SKPaint _skPaint = new SKPaint();
 
     public async Task Run(string pathToRead)
     {
-        _client.Timeout = TimeSpan.FromMilliseconds(20000);
+        _client.Timeout = TimeSpan.FromMilliseconds(TIMEOUT_MILLIS);
+        _skPaint.Color = new SKColor(0, 0, 0, 255);
 
         await GetShapesAsync(pathToRead);
         if (_pendingToDownload.Count == 0)
@@ -33,17 +36,18 @@ public class App
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
-        var t0 = DownloadAllImagesAsync();
-        var t1 = ProcessAllImagesAsync();
-        var list = new List<Task>();
-        list.Add(t0);
-        list.Add(t1);
-        await Task.WhenAll(list);
+        await Task.WhenAll(new Task[] { DownloadAllImagesAsync(), ProcessAllImagesAsync() });
 
         watch.Stop();
 
         Console.WriteLine($"===completed with {_failsSet.Count} errors and elasped time: {watch.ElapsedMilliseconds / 1000f} seconds===");
 
+        HandleFails();
+        HandleSuccesses();
+    }
+
+    private void HandleFails()
+    {
         if (_failsSet.Count > 0)
         {
             var log = FileUtils.CreateFileToRoot("", "error.txt");
@@ -54,14 +58,17 @@ public class App
             }
             File.WriteAllLines(log, fails);
         }
+    }
 
+    private void HandleSuccesses()
+    {
         if (_succeededSet.Count > 0)
         {
             var log = FileUtils.CreateFileToRoot("", "succeeded.txt");
             var successes = new List<string>();
             foreach (var s in _succeededSet)
             {
-                successes.Add(s.CreateLog());
+                successes.Add(s.CreateUpdateStatement());
             }
             File.WriteAllLines(log, successes);
         }
@@ -75,12 +82,9 @@ public class App
             var lines = await File.ReadAllLinesAsync(targetFile);
             foreach (var line in lines)
             {
-                var split = line.Split(',');
-                if (split.Count() == 2)
+                var shape = Shape.CreateFromLine(line);
+                if (shape != null)
                 {
-                    var shape = new Shape();
-                    shape.Id = split[0].Replace("\"", "");
-                    shape.Url = split[1].Replace("\"", "");
                     _pendingToDownload.Enqueue(shape);
                 }
             }
@@ -93,8 +97,18 @@ public class App
 
     private SKImageInfo GetTargetInfo(SKBitmap bitmap)
     {
-        var width = bitmap.Width;
-        var height = bitmap.Height;
+        var (width, height) = CalculateResized(bitmap.Width, bitmap.Height);
+        var info = bitmap.Info;
+        info.Width = width;
+        info.Height = height;
+        info.ColorType = SKImageInfo.PlatformColorType;
+        return info;
+    }
+
+    private Tuple<int, int> CalculateResized(int w, int h)
+    {
+        var width = w;
+        var height = h;
         var ratio = width * 1f / height;
         if (width > MAX_SIZE || height > MAX_SIZE)
         {
@@ -109,11 +123,7 @@ public class App
                 width = (int)(height * ratio);
             }
         }
-        var info = bitmap.Info;
-        info.Width = width;
-        info.Height = height;
-        info.ColorType = SKImageInfo.PlatformColorType;
-        return info;
+        return new Tuple<int, int>(width, height);
     }
 
     private async Task DownloadAllImagesAsync()
@@ -122,12 +132,13 @@ public class App
         {
             Shape shape = _pendingToDownload.Dequeue();
             var url = shape.Url;
+            var ext = shape.Extension;
             var id = shape.Id;
             string file = null;
 
             try
             {
-                file = FileUtils.CreateFileToRoot("original", $"{id}.png");
+                file = FileUtils.CreateFileToRoot("original", $"{id}.{ext}");
 
                 if (!File.Exists(file))
                 {
@@ -175,47 +186,17 @@ public class App
 
                    Shape shape = _pendingToProcess.Dequeue();
                    var path = shape.OutputPath;
-                   var id = shape.Id;
                    try
                    {
                        Console.WriteLine($"about to process: {path}");
 
-                       using (var stream = File.OpenRead(path))
-                       using (var inputStream = new SKManagedStream(stream))
+                       if (shape.IsRaster)
                        {
-                           var original = SKBitmap.Decode(inputStream);
-                           var info = GetTargetInfo(original);
-
-                           SKBitmap toResize;
-                           if (original.ColorType != SKImageInfo.PlatformColorType)
-                           {
-                               toResize = new SKBitmap(info);
-                               original.CopyTo(toResize, SKImageInfo.PlatformColorType);
-                           }
-                           else
-                           {
-                               toResize = original;
-                           }
-
-                           using (var resized = toResize.Resize(info, SKBitmapResizeMethod.Box))
-                           {
-                               using (var image = SKImage.FromBitmap(resized))
-                               {
-                                   using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{id}.png"), FileMode.OpenOrCreate))
-                                   {
-                                       image.Encode(SKEncodedImageFormat.Png, 90).SaveTo(output);
-                                   }
-                               }
-                           }
-                           toResize.Dispose();
-                           try
-                           {
-                               original.Dispose();
-                           }
-                           catch (Exception)
-                           {
-                               // ignore
-                           }
+                           SaveRaster(shape);
+                       }
+                       else
+                       {
+                           SaveVector(shape);
                        }
 
                        _succeededSet.Add(shape);
@@ -227,5 +208,77 @@ public class App
                    }
                }
            });
+    }
+
+    private void SaveVector(Shape shape)
+    {
+        var svg = new SkiaSharp.Extended.Svg.SKSvg();
+
+        svg.Load(shape.OutputPath);
+
+        var svgRect = svg.Picture.CullRect;
+        var (w, h) = CalculateResized((int)svgRect.Width, (int)svgRect.Height);
+        float svgMax = Math.Max(w, h);
+
+        float scale = w / svgRect.Width;
+        var matrix = SKMatrix.MakeScale(scale, scale);
+
+        var target = new SKBitmap(w, h,
+                     SKImageInfo.PlatformColorType, SKAlphaType.Premul);
+
+        using (target)
+        using (var canvas = new SKCanvas(target))
+        {
+            canvas.Clear();
+            canvas.DrawPicture(svg.Picture, ref matrix, _skPaint);
+            SaveToFile(shape.Id, target);
+        }
+    }
+
+    private void SaveRaster(Shape shape)
+    {
+        using (var stream = File.OpenRead(shape.OutputPath))
+        using (var inputStream = new SKManagedStream(stream))
+        {
+            var original = SKBitmap.Decode(inputStream);
+            var info = GetTargetInfo(original);
+
+            SKBitmap target;
+            if (original.ColorType != SKImageInfo.PlatformColorType)
+            {
+                target = new SKBitmap(info);
+                original.CopyTo(target, SKImageInfo.PlatformColorType);
+            }
+            else
+            {
+                target = original;
+            }
+
+            using (var resized = target.Resize(info, SKBitmapResizeMethod.Box))
+            {
+                SaveToFile(shape.Id, resized);
+            }
+
+            try
+            {
+                target.Dispose();
+                original.Dispose();
+            }
+            catch (Exception)
+            {
+                // ignore
+            }
+        }
+    }
+
+    private void SaveToFile(string id, SKBitmap bitmap)
+    {
+        using (var image = SKImage.FromBitmap(bitmap))
+        {
+            using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{id}.png"), FileMode.OpenOrCreate))
+            {
+                image.Encode(SKEncodedImageFormat.Png, 90).SaveTo(output);
+            }
+        }
     }
 }

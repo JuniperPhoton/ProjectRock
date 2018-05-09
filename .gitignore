@@ -10,9 +10,10 @@ obj/
 bin/
 .vs/
 .vscode/
-./original
-./resized
-
+original/
+resized/
+succeeded.txt
+error.txt
 
 # globs
 Makefile.in

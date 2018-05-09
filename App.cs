@@ -20,7 +20,7 @@ public class App
 
     public async Task Run(string pathToRead)
     {
-        _client.Timeout = TimeSpan.FromMilliseconds(10000);
+        _client.Timeout = TimeSpan.FromMilliseconds(20000);
 
         await GetShapesAsync(pathToRead);
         if (_pendingToDownload.Count == 0)
@@ -91,7 +91,7 @@ public class App
         }
     }
 
-    private SKImageInfo GetTargetSize(SKBitmap bitmap)
+    private SKImageInfo GetTargetInfo(SKBitmap bitmap)
     {
         var width = bitmap.Width;
         var height = bitmap.Height;
@@ -109,7 +109,11 @@ public class App
                 width = (int)(height * ratio);
             }
         }
-        return new SKImageInfo(width, height);
+        var info = bitmap.Info;
+        info.Width = width;
+        info.Height = height;
+        info.ColorType = SKImageInfo.PlatformColorType;
+        return info;
     }
 
     private async Task DownloadAllImagesAsync()
@@ -123,21 +127,22 @@ public class App
 
             try
             {
-                Console.WriteLine($"about to download: {url}");
-                using (var result = await _client.GetAsync(url))
-                {
-                    result.EnsureSuccessStatusCode();
-                    using (var stream = await result.Content.ReadAsStreamAsync())
-                    {
-                        file = FileUtils.CreateFileToRoot("original", $"{id}.png");
-                        using (var output = File.Open(file, FileMode.Create))
-                        {
-                            byte[] buffer = new byte[32 * 1024];
-                            int read;
+                file = FileUtils.CreateFileToRoot("original", $"{id}.png");
 
-                            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                if (!File.Exists(file))
+                {
+                    Console.WriteLine($"about to download: {url}");
+
+                    using (var result = await _client.GetAsync(url))
+                    {
+                        result.EnsureSuccessStatusCode();
+                        using (var stream = await result.Content.ReadAsStreamAsync())
+                        {
+                            using (var memoryStream = new MemoryStream())
                             {
-                                output.Write(buffer, 0, read);
+                                stream.CopyTo(memoryStream);
+                                var array = memoryStream.ToArray();
+                                File.WriteAllBytes(file, array);
                             }
                         }
                     }
@@ -177,22 +182,39 @@ public class App
 
                        using (var stream = File.OpenRead(path))
                        using (var inputStream = new SKManagedStream(stream))
-                       using (var original = SKBitmap.Decode(inputStream))
                        {
-                           if (original.ColorType != SKColorType.Rgba8888)
+                           var original = SKBitmap.Decode(inputStream);
+                           var info = GetTargetInfo(original);
+
+                           SKBitmap toResize;
+                           if (original.ColorType != SKImageInfo.PlatformColorType)
                            {
-                               original.CopyTo(original, SKColorType.Rgba8888);
+                               toResize = new SKBitmap(info);
+                               original.CopyTo(toResize, SKImageInfo.PlatformColorType);
+                           }
+                           else
+                           {
+                               toResize = original;
                            }
 
-                           using (var resized = original.Resize(GetTargetSize(original), SKBitmapResizeMethod.Lanczos3))
+                           using (var resized = toResize.Resize(info, SKBitmapResizeMethod.Box))
                            {
                                using (var image = SKImage.FromBitmap(resized))
                                {
                                    using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{id}.png"), FileMode.OpenOrCreate))
                                    {
-                                       image.Encode(SKEncodedImageFormat.Png, 80).SaveTo(output);
+                                       image.Encode(SKEncodedImageFormat.Png, 90).SaveTo(output);
                                    }
                                }
+                           }
+                           toResize.Dispose();
+                           try
+                           {
+                               original.Dispose();
+                           }
+                           catch (Exception)
+                           {
+                               // ignore
                            }
                        }
 
@@ -203,8 +225,6 @@ public class App
                        Console.WriteLine($"failed to process: {path}, error: {e.Message}");
                        _failsSet.Add(shape);
                    }
-
-                   //Console.WriteLine($"pending to process: {_pendingToProcess.Count}, {_pendingToDownload.Count}");
                }
            });
     }

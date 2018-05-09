@@ -20,7 +20,7 @@ public class App
     private HttpClient _client = new HttpClient();
     private SKPaint _skPaint = new SKPaint();
 
-    public async Task Run(string pathToRead)
+    public async Task RunAsync(string pathToRead)
     {
         _client.Timeout = TimeSpan.FromMilliseconds(TIMEOUT_MILLIS);
         _skPaint.Color = new SKColor(0, 0, 0, 255);
@@ -36,17 +36,20 @@ public class App
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
-        await Task.WhenAll(new Task[] { DownloadAllImagesAsync(), ProcessAllImagesAsync() });
+        await Task.WhenAll(new Task[] { DownloadAsync(), ProcessAsync() });
 
         watch.Stop();
 
-        Console.WriteLine($"===completed with {_failsSet.Count} errors and elasped time: {watch.ElapsedMilliseconds / 1000f} seconds===");
+        Console.WriteLine($"===completed with {_failsSet.Count} errors and elapsed time: {watch.ElapsedMilliseconds / 1000f} seconds===");
+        
+        _client.Dispose();
+        _skPaint.Dispose();
 
-        HandleFails();
-        HandleSuccesses();
+        HandleFailure();
+        HandleSuccess();
     }
 
-    private void HandleFails()
+    private void HandleFailure()
     {
         if (_failsSet.Count > 0)
         {
@@ -60,7 +63,7 @@ public class App
         }
     }
 
-    private void HandleSuccesses()
+    private void HandleSuccess()
     {
         if (_succeededSet.Count > 0)
         {
@@ -126,7 +129,7 @@ public class App
         return new Tuple<int, int>(width, height);
     }
 
-    private async Task DownloadAllImagesAsync()
+    private async Task DownloadAsync()
     {
         var total = _pendingToDownload.Count;
         var handling = 0f;
@@ -174,7 +177,7 @@ public class App
         }
     }
 
-    private async Task ProcessAllImagesAsync()
+    private async Task ProcessAsync()
     {
         var wait = new SpinWait();
 

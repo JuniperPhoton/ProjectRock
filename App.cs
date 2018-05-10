@@ -21,10 +21,12 @@ public class App
     private HttpClient _client = new HttpClient();
     private SKPaint _skPaint = new SKPaint();
 
+    private int _totalCount;
+
     public async Task RunAsync(string pathToRead)
     {
         _client.Timeout = TimeSpan.FromMilliseconds(TIMEOUT_MILLIS);
-        _skPaint.Color = new SKColor(0, 0, 0, 255);
+        _skPaint.Color = new SKColor(118, 118, 118, 255);
 
         await GetShapesAsync(pathToRead);
         if (_pendingToDownload.Count == 0)
@@ -32,6 +34,8 @@ public class App
             Console.WriteLine("No shapes found");
             return;
         }
+
+        _totalCount = _pendingToDownload.Count;
 
         Console.WriteLine($"about to process {_pendingToDownload.Count} shapes");
 
@@ -114,25 +118,21 @@ public class App
         var width = w;
         var height = h;
         var ratio = width * 1f / height;
-        if (width > MAX_SIZE || height > MAX_SIZE)
+        if (width > height)
         {
-            if (width > height)
-            {
-                width = MAX_SIZE;
-                height = (int)(width / ratio);
-            }
-            else
-            {
-                height = MAX_SIZE;
-                width = (int)(height * ratio);
-            }
+            width = MAX_SIZE;
+            height = (int)(width / ratio);
+        }
+        else
+        {
+            height = MAX_SIZE;
+            width = (int)(height * ratio);
         }
         return new Tuple<int, int>(width, height);
     }
 
     private async Task DownloadAsync()
     {
-        var total = _pendingToDownload.Count;
         var handling = 0f;
         while (_pendingToDownload.Count > 0)
         {
@@ -149,7 +149,7 @@ public class App
                 handling++;
 
                 //Console.Clear();
-                //Console.WriteLine($"==download progress=={((handling / total) * 100):F}%");
+                //Console.WriteLine($"==download progress=={((handling / _totalCount) * 100):F}%");
 
                 if (!File.Exists(file))
                 {
@@ -185,7 +185,6 @@ public class App
 
         await Task.Run(() =>
            {
-               var total = _pendingToDownload.Count;
                var handling = 0d;
                while (_pendingToProcess.Count > 0 || _pendingToDownload.Count > 0)
                {
@@ -198,7 +197,7 @@ public class App
                    handling++;
 
                    Console.Clear();
-                   Console.WriteLine($"==process progress=={((handling / total) * 100):F}%");
+                   Console.WriteLine($"==process progress=={((handling / _totalCount) * 100):F}%");
 
                    if (!_pendingToProcess.TryDequeue(out var shape)) continue;
 
@@ -236,9 +235,13 @@ public class App
         float svgMax = Math.Max(w, h);
 
         float scale = w / svgRect.Width;
-        var matrix = SKMatrix.MakeScale(scale, scale);
+        var matrixS = SKMatrix.MakeScale(scale, scale);
+        var matrixT = SKMatrix.MakeTranslation((MAX_SIZE - w) / 2, (MAX_SIZE - h) / 2);
+        var matrix = SKMatrix.MakeIdentity();
 
-        var target = new SKBitmap(w, h,
+        SKMatrix.Concat(ref matrix, matrixT, matrixS);
+
+        var target = new SKBitmap(MAX_SIZE, MAX_SIZE,
                      SKImageInfo.PlatformColorType, SKAlphaType.Premul);
 
         using (target)
@@ -246,7 +249,7 @@ public class App
         {
             canvas.Clear();
             canvas.DrawPicture(svg.Picture, ref matrix, _skPaint);
-            SaveToFile(shape.Id, target);
+            SaveToFile(shape.Id, "svg", target);
         }
     }
 
@@ -258,25 +261,39 @@ public class App
             var original = SKBitmap.Decode(inputStream);
             var info = GetTargetInfo(original);
 
-            SKBitmap target;
+            SKBitmap pendingResize;
             if (original.ColorType != SKImageInfo.PlatformColorType)
             {
-                target = new SKBitmap(info);
-                original.CopyTo(target, SKImageInfo.PlatformColorType);
+                pendingResize = new SKBitmap(info);
+                original.CopyTo(pendingResize, SKImageInfo.PlatformColorType);
             }
             else
             {
-                target = original;
+                pendingResize = original;
             }
 
-            using (var resized = target.Resize(info, SKBitmapResizeMethod.Box))
+            var target = new SKBitmap(MAX_SIZE, MAX_SIZE,
+                     SKImageInfo.PlatformColorType, SKAlphaType.Premul);
+
+            using (target)
+            using (var resized = pendingResize.Resize(info, SKBitmapResizeMethod.Box))
             {
-                SaveToFile(shape.Id, resized);
+                using (var canvas = new SKCanvas(target))
+                {
+                    var l = (MAX_SIZE - info.Width) / 2;
+                    var t = (MAX_SIZE - info.Height) / 2;
+                    var r = l + info.Width;
+                    var b = t + info.Height;
+                    var rect = new SKRect(l, t, r, b);
+                    canvas.Clear();
+                    canvas.DrawBitmap(resized, rect, null);
+                    SaveToFile(shape.Id, "png", target);
+                }
             }
 
             try
             {
-                target.Dispose();
+                pendingResize.Dispose();
                 original.Dispose();
             }
             catch (Exception)
@@ -286,11 +303,11 @@ public class App
         }
     }
 
-    private void SaveToFile(string id, SKBitmap bitmap)
+    private void SaveToFile(string id, string dir, SKBitmap bitmap)
     {
         using (var image = SKImage.FromBitmap(bitmap))
         {
-            using (var output = File.Open(FileUtils.CreateFileToRoot("resized", $"{id}.png"), FileMode.OpenOrCreate))
+            using (var output = File.Open(FileUtils.CreateFileToRoot(dir, $"{id}.png"), FileMode.OpenOrCreate))
             {
                 image.Encode(SKEncodedImageFormat.Png, 90).SaveTo(output);
             }
